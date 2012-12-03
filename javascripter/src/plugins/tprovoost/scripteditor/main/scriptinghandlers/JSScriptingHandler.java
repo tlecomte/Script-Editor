@@ -14,6 +14,8 @@ import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import javassist.compiler.ast.NewExpr;
+
 import javax.script.ScriptEngine;
 import javax.script.ScriptException;
 import javax.swing.JTextArea;
@@ -31,11 +33,17 @@ import org.fife.ui.rtextarea.Gutter;
 import plugins.tprovoost.scriptenginehandler.ScriptEngineHandler;
 import sun.org.mozilla.javascript.internal.CompilerEnvirons;
 import sun.org.mozilla.javascript.internal.Context;
-import sun.org.mozilla.javascript.internal.FunctionNode;
 import sun.org.mozilla.javascript.internal.Node;
 import sun.org.mozilla.javascript.internal.Parser;
-import sun.org.mozilla.javascript.internal.ScriptOrFnNode;
 import sun.org.mozilla.javascript.internal.Token;
+import sun.org.mozilla.javascript.internal.ast.Assignment;
+import sun.org.mozilla.javascript.internal.ast.AstNode;
+import sun.org.mozilla.javascript.internal.ast.AstRoot;
+import sun.org.mozilla.javascript.internal.ast.ExpressionStatement;
+import sun.org.mozilla.javascript.internal.ast.FunctionCall;
+import sun.org.mozilla.javascript.internal.ast.FunctionNode;
+import sun.org.mozilla.javascript.internal.ast.Name;
+import sun.org.mozilla.javascript.internal.ast.NewExpression;
 
 public class JSScriptingHandler extends ScriptingHandler {
 
@@ -132,7 +140,7 @@ public class JSScriptingHandler extends ScriptingHandler {
 	    offset = idxString + foundString.length();
 	}
     }
-    
+
     @Override
     public void autoDownloadPlugins() {
 	String s = textArea.getText();
@@ -158,12 +166,12 @@ public class JSScriptingHandler extends ScriptingHandler {
 	while (m.find(offset)) {
 	    String foundString = m.group(0);
 	    String imported = m.group(2);
-	    
+
 	    for (PluginDescriptor pd : PluginRepositoryLoader.getPlugins()) {
 		if (pd.getClassName().startsWith(imported) && !pd.isInstalled())
 		    PluginInstaller.install(pd, false);
 	    }
-	    
+
 	    int idxString = s.indexOf(foundString, offset);
 	    if (idxString == -1)
 		break;
@@ -176,7 +184,7 @@ public class JSScriptingHandler extends ScriptingHandler {
 	final CompilerEnvirons comp = new CompilerEnvirons();
 	comp.initFromContext(context);
 	final Parser parser = new Parser(comp, comp.getErrorReporter());
-	ScriptOrFnNode root;
+	AstRoot root;
 	root = parser.parse(s, "", 1);
 
 	if (root == null || !root.hasChildren())
@@ -229,7 +237,7 @@ public class JSScriptingHandler extends ScriptingHandler {
      * @param commandIdx
      * @param decal
      */
-    private void dumpTree(Node n, ScriptOrFnNode root, int commandIdx, String decal) {
+    private void dumpTree(Node n, AstRoot root, int commandIdx, String decal) {
 	System.out.print(commandIdx + ": " + decal + typeToName(n.getType()));
 	switch (n.getType()) {
 	case Token.BINDNAME:
@@ -250,11 +258,11 @@ public class JSScriptingHandler extends ScriptingHandler {
 	    if (fn.getFunctionType() != FunctionNode.FUNCTION_EXPRESSION) {
 		System.out.println("not an expression.");
 	    }
-	    String funcName = fn.getFunctionName();
+	    Name funcName = fn.getFunctionName();
 	    System.out.print(": " + funcName + " ");
 	    for (int i = 0; i < fn.getParamCount(); ++i) {
 		String s = fn.getParamOrVarName(i);
-		if (s == null || s == "" || s.contentEquals(funcName))
+		if (s == null || s == "" || s.contentEquals(funcName.getString()))
 		    continue;
 		System.out.print(s + " ");
 	    }
@@ -284,7 +292,7 @@ public class JSScriptingHandler extends ScriptingHandler {
      * @param root
      * @throws ScriptException
      */
-    private void registerVariables(String text, Node n, ScriptOrFnNode root) throws ScriptException {
+    private void registerVariables(String text, Node n, AstRoot root) throws ScriptException {
 	if (DEBUG)
 	    System.out.println(typeToName(n.getType()) + " " + commandStartOffset + "/" + commandEndOffset);
 	// register current
@@ -346,7 +354,7 @@ public class JSScriptingHandler extends ScriptingHandler {
      * @return
      * @throws ScriptException
      */
-    private Completion generateCompletion(Node n, ScriptOrFnNode root, String text) throws ScriptException {
+    private Completion generateCompletion(Node n, AstRoot root, String text) throws ScriptException {
 	switch (n.getType()) {
 	case Token.VAR:
 	    if (n.getFirstChild() != null && n.getFirstChild().getType() == Token.NAME) {
@@ -389,15 +397,15 @@ public class JSScriptingHandler extends ScriptingHandler {
 	    // commandStartOffset, commandEndOffset);
 	    int fnIndex = n.getExistingIntProp(Node.FUNCTION_PROP);
 	    FunctionNode fn = root.getFunctionNode(fnIndex);
-	    String funcName = fn.getFunctionName();
+	    Name funcName = fn.getFunctionName();
 	    ArrayList<Parameter> params = new ArrayList<Parameter>();
 	    for (int i = 0; i < fn.getParamAndVarCount(); ++i) {
 		String s = fn.getParamOrVarName(i);
-		if (s == null || s == "" || s.contentEquals(funcName))
+		if (s == null || s == "" || s.contentEquals(funcName.getString()))
 		    continue;
 		params.add(new Parameter("", s));
 	    }
-	    FunctionCompletion fc = new FunctionCompletion(provider, funcName, "");
+	    FunctionCompletion fc = new FunctionCompletion(provider, funcName.getString(), "");
 	    fc.setParams(params);
 	    fc.setRelevance(RELEVANCE_HIGH);
 	    return fc;
@@ -435,6 +443,22 @@ public class JSScriptingHandler extends ScriptingHandler {
 	    else
 		commandEndOffset += 1;
 	}
+	    break;
+
+	case Token.EXPR_RESULT:
+	    // AstNode expr = ((ExpressionStatement) n).getExpression();
+	    // if (expr instanceof FunctionCall) {
+	    // FunctionCall fc = (FunctionCall) expr;
+	    // System.out.println("Function call:" + fc.getTarget().getString()
+	    // + ".");
+	    // } else if (expr instanceof Assignment) {
+	    // Assignment as = (Assignment)expr;
+	    // AstNode node = as.getRight();
+	    // if (node instanceof NewExpression) {
+	    // System.out.println("New: " + ((NewExpression)
+	    // node).getTarget().getString());
+	    // }
+	    // }
 	    break;
 
 	// case Token.WITH:
